@@ -16,6 +16,7 @@ pub struct ConsumerConfig {
     pub host: String,
     pub topic: String,
     pub app_name: String,
+    pub pool_size: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -57,7 +58,7 @@ impl ConsumerWrapper {
             .unwrap();
 
         let worker_pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(8)
+            .num_threads(config.pool_size.try_into().unwrap())
             .build()
             .unwrap();
 

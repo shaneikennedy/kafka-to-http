@@ -43,6 +43,39 @@ impl Config {
     }
 }
 
+pub struct ProxyApplication {
+    proxies: Vec<Proxy>,
+    worker_pool: ThreadPool,
+}
+
+impl ProxyApplication {
+    pub fn build(config: Config) -> Result<ProxyApplication, &'static str> {
+        let mut proxies: Vec<Proxy> = Vec::new();
+        for proxy in config.proxies {
+            let message_handler = MessageHandler::build(proxy.http_config);
+            let consumer = Proxy::build(proxy.consumer_config, message_handler).unwrap();
+            proxies.push(consumer);
+        }
+        let worker_pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(proxies.len())
+            .build()
+            .unwrap();
+
+        return Ok(ProxyApplication {
+            proxies,
+            worker_pool,
+        });
+    }
+
+    pub fn start(self) {
+        self.worker_pool.scope(|s| {
+            for mut proxy in self.proxies {
+                s.spawn(move |_| proxy.start())
+            }
+        });
+    }
+}
+
 #[derive(Debug)]
 pub struct Proxy {
     pub consumer: Consumer,

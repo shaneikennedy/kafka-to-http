@@ -1,26 +1,24 @@
-use std::time::Duration;
+use std::{env, process, time::Duration};
 
 use kafka::consumer::{Consumer, FetchOffset, GroupOffsetStorage};
-use reqwest::blocking::Response;
+use kafka_quickstart::{Config, ConsumerConfig, HttpConfig};
+use reqwest::blocking::{Client, Response};
 
 fn main() {
-    let mut consumer = Consumer::from_hosts(vec!["localhost:9092".to_owned()])
-        .with_topic("quickstart".to_owned())
-        .with_fallback_offset(FetchOffset::Latest)
-        .with_group("my-group".to_owned())
-        .with_offset_storage(GroupOffsetStorage::Kafka)
-        .create()
-        .unwrap();
-    let destination = "http://localhost:8080";
+    let args: Vec<String> = env::args().collect();
+    let config = Config::build(&args).unwrap_or_else(|err| {
+        eprintln!("Problems parsing arguments: {err}");
+        process::exit(1);
+    });
+
+    let mut consumer = init_consumer(config.consumer);
     let client = reqwest::blocking::Client::new();
     loop {
         for ms in consumer.poll().unwrap().iter() {
             for m in ms.messages() {
-                let endpoint = String::from_utf8(m.value.to_vec()).expect("please");
-                let request = client
-                    .get(format!("{destination}/{endpoint}"))
-                    .timeout(Duration::new(2, 0))
-                    .send();
+                let request_defaults = setup_http_request(&client, &config.http);
+                let body = String::from_utf8(m.value.to_vec()).expect("expecting string body");
+                let request = request_defaults.body(body).send();
                 if request.is_ok() {
                     let resp = request.ok();
                     match resp {
@@ -37,6 +35,27 @@ fn main() {
     }
 }
 
+fn init_consumer(config: ConsumerConfig) -> Consumer {
+    Consumer::from_hosts(vec![config.host])
+        .with_topic(config.topic)
+        .with_fallback_offset(FetchOffset::Latest)
+        .with_group(config.app_name.to_owned())
+        .with_offset_storage(GroupOffsetStorage::Kafka)
+        .create()
+        .unwrap()
+}
+
+fn setup_http_request(client: &Client, config: &HttpConfig) -> reqwest::blocking::RequestBuilder {
+    let msg_dst = format!("{0}/{1}", config.host, config.endpoint);
+    client
+        .post(msg_dst)
+        .timeout(Duration::new(config.timeout, 0))
+}
+
+fn handle_request_error() {
+    println!("what the fuck");
+}
+
 fn handle_response(response: Response) {
     print!("Received {:?} ", response.status());
     match response.status().as_u16() {
@@ -45,8 +64,4 @@ fn handle_response(response: Response) {
         s if s >= 500 => println!("Server error"),
         _ => println!("received unhanlded status code"),
     }
-}
-
-fn handle_request_error() {
-    println!("what the fuck");
 }

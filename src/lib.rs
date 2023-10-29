@@ -21,8 +21,8 @@ pub struct ConsumerConfig {
 
 #[derive(Debug, Deserialize)]
 pub struct HttpConfig {
-    pub host: String,
-    pub endpoint: String,
+    pub target_host: String,
+    pub target_endpoint: String,
     pub timeout: u64,
 }
 
@@ -95,7 +95,10 @@ impl MessageHandler {
     pub fn build(http_config: HttpConfig) -> MessageHandler {
         MessageHandler {
             client: reqwest::blocking::Client::new(),
-            msg_destination: format!("{0}/{1}", http_config.host, http_config.endpoint),
+            msg_destination: format!(
+                "{0}/{1}",
+                http_config.target_host, http_config.target_endpoint
+            ),
             timeout_policy: Duration::new(http_config.timeout, 0),
         }
     }

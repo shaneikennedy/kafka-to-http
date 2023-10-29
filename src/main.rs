@@ -2,7 +2,8 @@ use std::{env, process, time::Duration};
 
 use kafka::consumer::{Consumer, FetchOffset, GroupOffsetStorage};
 use kafka_quickstart::{Config, ConsumerConfig, HttpConfig};
-use reqwest::blocking::{Client, Response};
+use reqwest::blocking::{Client, RequestBuilder, Response};
+use threadpool;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -13,21 +14,14 @@ fn main() {
 
     let mut consumer = init_consumer(config.consumer);
     let client = reqwest::blocking::Client::new();
+    let threadpool = threadpool::Builder::new().num_threads(10).build();
     loop {
         for ms in consumer.poll().unwrap().iter() {
             for m in ms.messages() {
                 let request_defaults = setup_http_request(&client, &config.http);
                 let body = String::from_utf8(m.value.to_vec()).expect("expecting string body");
-                let request = request_defaults.body(body).send();
-                if request.is_ok() {
-                    let resp = request.ok();
-                    match resp {
-                        Some(r) => handle_response(r),
-                        None => handle_request_error(),
-                    }
-                } else {
-                    handle_request_error();
-                }
+                println!("{:#?}", body);
+                threadpool.execute(|| handle_message(request_defaults, body));
             }
             let _ = consumer.consume_messageset(ms);
         }
@@ -43,6 +37,19 @@ fn init_consumer(config: ConsumerConfig) -> Consumer {
         .with_offset_storage(GroupOffsetStorage::Kafka)
         .create()
         .unwrap()
+}
+
+fn handle_message(req: RequestBuilder, body: String) {
+    let request = req.body(body).send();
+    if request.is_ok() {
+        let resp = request.ok();
+        match resp {
+            Some(r) => handle_response(r),
+            None => handle_request_error(),
+        }
+    } else {
+        handle_request_error();
+    }
 }
 
 fn setup_http_request(client: &Client, config: &HttpConfig) -> reqwest::blocking::RequestBuilder {

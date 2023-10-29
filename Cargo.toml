@@ -10,3 +10,4 @@ kafka = "0.9.0"
 reqwest = { version = "0.11", features = ["blocking", "json"] }
 serde = { version = "1.0.189", features = ["derive"] }
 serde_yaml = "0.8"
+threadpool = "1.8.1"

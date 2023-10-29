@@ -1,6 +1,6 @@
 use std::{env, process};
 
-use kafka_quickstart::{Config, ConsumerWrapper, MessageHandler};
+use kafka_to_http::{Config, ConsumerWrapper, MessageHandler};
 
 fn main() {
     let args: Vec<String> = env::args().collect();

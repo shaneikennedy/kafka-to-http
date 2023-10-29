@@ -461,7 +461,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "kafka-quickstart"
+name = "kafka-to-http"
 version = "0.1.0"
 dependencies = [
  "kafka",

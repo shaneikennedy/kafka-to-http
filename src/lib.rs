@@ -1,6 +1,9 @@
-use kafka::consumer::{Consumer, FetchOffset, GroupOffsetStorage};
+use kafka::{
+    consumer::{Consumer, FetchOffset, GroupOffsetStorage},
+    producer::{Producer, Record, RequiredAcks},
+};
 use rayon::ThreadPool;
-use reqwest::blocking::{Client, Response};
+use reqwest::blocking::Client;
 use serde::Deserialize;
 use serde_yaml::{self};
 use std::time::Duration;
@@ -14,6 +17,7 @@ pub struct Config {
 pub struct ProxyConfig {
     pub consumer_config: ConsumerConfig,
     pub http_config: HttpConfig,
+    pub deadletter_config: Option<DeadLetterConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -29,6 +33,12 @@ pub struct HttpConfig {
     pub target_host: String,
     pub target_endpoint: String,
     pub timeout: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeadLetterConfig {
+    pub host: String,
+    pub topic: String,
 }
 
 impl Config {
@@ -52,7 +62,7 @@ impl ProxyApplication {
     pub fn build(config: Config) -> Result<ProxyApplication, &'static str> {
         let mut proxies: Vec<Proxy> = Vec::new();
         for proxy in config.proxies {
-            let message_handler = MessageHandler::build(proxy.http_config);
+            let message_handler = MessageHandler::build(proxy.http_config, proxy.deadletter_config);
             let consumer = Proxy::build(proxy.consumer_config, message_handler).unwrap();
             proxies.push(consumer);
         }
@@ -76,7 +86,6 @@ impl ProxyApplication {
     }
 }
 
-#[derive(Debug)]
 pub struct Proxy {
     pub consumer: Consumer,
     pub worker_pool: ThreadPool,
@@ -128,15 +137,15 @@ impl Proxy {
     }
 }
 
-#[derive(Debug)]
 pub struct MessageHandler {
     client: Client,
     msg_destination: String,
     timeout_policy: Duration,
+    dlq_config: Option<DeadLetterConfig>,
 }
 
 impl MessageHandler {
-    pub fn build(http_config: HttpConfig) -> MessageHandler {
+    pub fn build(http_config: HttpConfig, dlq_config: Option<DeadLetterConfig>) -> MessageHandler {
         MessageHandler {
             client: reqwest::blocking::Client::new(),
             msg_destination: format!(
@@ -144,6 +153,7 @@ impl MessageHandler {
                 http_config.target_host, http_config.target_endpoint
             ),
             timeout_policy: Duration::new(http_config.timeout, 0),
+            dlq_config,
         }
     }
 
@@ -155,11 +165,14 @@ impl MessageHandler {
         if request.is_ok() {
             let resp = request.ok();
             match resp {
-                Some(r) => self.handle_response(r),
-                None => self.handle_request_error(),
+                Some(r) => match r.status().as_u16() {
+                    s if s >= 200 && s < 400 => println!("Message delivered successfully"),
+                    _ => self.handle_request_error(data),
+                },
+                None => println!("somehow request is ok but also not ok"),
             }
         } else {
-            self.handle_request_error();
+            self.handle_request_error(data);
         }
     }
 
@@ -169,17 +182,19 @@ impl MessageHandler {
             .timeout(self.timeout_policy)
     }
 
-    fn handle_request_error(&self) {
-        println!("what the fuck");
-    }
-
-    fn handle_response(&self, response: Response) {
-        print!("Received {:?} ", response.status());
-        match response.status().as_u16() {
-            s if s >= 200 && s < 400 => println!("Message delivered successfully"),
-            s if s >= 400 && s < 500 => println!("Client error, check your request"),
-            s if s >= 500 => println!("Server error"),
-            _ => println!("received unhanlded status code"),
+    fn handle_request_error(&self, data: Vec<u8>) {
+        match &self.dlq_config {
+            Some(c) => {
+                let mut dlq = Producer::from_hosts(vec![c.host.clone()])
+                    .with_ack_timeout(Duration::from_secs(1))
+                    .with_required_acks(RequiredAcks::One)
+                    .create()
+                    .unwrap();
+                println!("dumping to dlq");
+                dlq.send(&Record::from_value(c.topic.as_str(), data))
+                    .unwrap();
+            }
+            None => println!("Not dumping to dlq"),
         }
     }
 }

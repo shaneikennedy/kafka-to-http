@@ -7,8 +7,13 @@ use std::time::Duration;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
-    pub consumer: ConsumerConfig,
-    pub http: HttpConfig,
+    pub proxies: Vec<ProxyConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProxyConfig {
+    pub consumer_config: ConsumerConfig,
+    pub http_config: HttpConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -38,21 +43,23 @@ impl Config {
     }
 }
 
-pub struct ConsumerWrapper {
+#[derive(Debug)]
+pub struct Proxy {
     pub consumer: Consumer,
     pub worker_pool: ThreadPool,
     pub handler: MessageHandler,
 }
 
-impl ConsumerWrapper {
+impl Proxy {
     pub fn build(
         config: ConsumerConfig,
         message_handler: MessageHandler,
-    ) -> Result<ConsumerWrapper, &'static str> {
+    ) -> Result<Proxy, &'static str> {
+        let topic = String::from(config.topic);
         let consumer = Consumer::from_hosts(vec![config.host])
-            .with_topic(config.topic)
+            .with_topic(topic.clone())
             .with_fallback_offset(FetchOffset::Latest)
-            .with_group(config.app_name.to_owned())
+            .with_group(format!("{}-{}", config.app_name.to_owned(), topic.clone()))
             .with_offset_storage(GroupOffsetStorage::Kafka)
             .create()
             .unwrap();
@@ -62,29 +69,33 @@ impl ConsumerWrapper {
             .build()
             .unwrap();
 
-        return Ok(ConsumerWrapper {
+        return Ok(Proxy {
             consumer,
             worker_pool,
             handler: message_handler,
         });
     }
 
-    pub fn consume(&mut self) {
+    pub fn start(&mut self) {
         loop {
-            self.worker_pool.scope(|s| {
-                for ms in self.consumer.poll().unwrap().iter() {
-                    for m in ms.messages() {
-                        let data = Vec::from(m.value);
-                        s.spawn(|_| self.handler.handle(data));
+            let ms = self.consumer.poll().unwrap();
+            if !ms.is_empty() {
+                self.worker_pool.scope(|s| {
+                    for set in ms.iter() {
+                        for m in set.messages() {
+                            let data = Vec::from(m.value);
+                            s.spawn(|_| self.handler.handle(data));
+                        }
+                        let _ = self.consumer.consume_messageset(set);
                     }
-                    let _ = self.consumer.consume_messageset(ms);
-                }
-                self.consumer.commit_consumed().unwrap();
-            })
+                    self.consumer.commit_consumed().unwrap();
+                })
+            }
         }
     }
 }
 
+#[derive(Debug)]
 pub struct MessageHandler {
     client: Client,
     msg_destination: String,

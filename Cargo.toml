@@ -7,8 +7,10 @@ edition = "2021"
 
 [dependencies]
 kafka = "0.9.0"
+log = "0.4.20"
 rayon = "1.8.0"
 reqwest = { version = "0.11", features = ["blocking", "json"] }
 retry = "2.0.0"
 serde = { version = "1.0.189", features = ["derive"] }
 serde_yaml = "0.8"
+simple_logger = "4.2.0"

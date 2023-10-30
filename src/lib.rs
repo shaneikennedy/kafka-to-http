@@ -2,6 +2,7 @@ use kafka::{
     consumer::{Consumer, FetchOffset, GroupOffsetStorage},
     producer::{Producer, Record, RequiredAcks},
 };
+use log::{error, info};
 use rayon::ThreadPool;
 use reqwest::blocking::Client;
 use retry::{
@@ -85,6 +86,11 @@ impl ProxyApplication {
     pub fn start(self) {
         self.worker_pool.scope(|s| {
             for mut proxy in self.proxies {
+                info!(
+                    "Starting proxy for topic: {} to endpoint {}",
+                    proxy.consumer.group(),
+                    proxy.handler.msg_destination
+                );
                 s.spawn(move |_| proxy.start())
             }
         });
@@ -116,6 +122,10 @@ impl Proxy {
             .build()
             .unwrap();
 
+        info!(
+            "Proxy configured for kafka topic {} with {} workers",
+            topic, config.pool_size
+        );
         return Ok(Proxy {
             consumer,
             worker_pool,
@@ -187,7 +197,7 @@ impl MessageHandler {
         );
 
         match result {
-            Ok(_) => println!("Message delivered"),
+            Ok(_) => info!("Message delivered"),
             Err(_) => self.handle_request_error(data),
         }
     }
@@ -206,11 +216,11 @@ impl MessageHandler {
                     .with_required_acks(RequiredAcks::One)
                     .create()
                     .unwrap();
-                println!("dumping to dlq");
+                info!("dumping to dlq");
                 dlq.send(&Record::from_value(c.topic.as_str(), data))
                     .unwrap();
             }
-            None => println!("Not dumping to dlq"),
+            None => error!("Dropping message: {:?}", data),
         }
     }
 }

@@ -4,6 +4,10 @@ use kafka::{
 };
 use rayon::ThreadPool;
 use reqwest::blocking::Client;
+use retry::{
+    delay::{jitter, Exponential},
+    retry_with_index,
+};
 use serde::Deserialize;
 use serde_yaml::{self};
 use std::time::Duration;
@@ -158,21 +162,27 @@ impl MessageHandler {
     }
 
     pub fn handle(&self, data: Vec<u8>) {
-        let request_defaults = self.setup_http_request();
-        let body = String::from_utf8(data.to_vec()).expect("expecting string body");
-        println!("{:#?}", body);
-        let request = request_defaults.body(body).send();
-        if request.is_ok() {
-            let resp = request.ok();
-            match resp {
-                Some(r) => match r.status().as_u16() {
-                    s if s >= 200 && s < 400 => println!("Message delivered successfully"),
-                    _ => self.handle_request_error(data),
-                },
-                None => println!("somehow request is ok but also not ok"),
+        let result = retry_with_index(Exponential::from_millis(10).map(jitter).take(3), |x| {
+            println!("retry attempt {}", x);
+            let body = String::from_utf8(data.to_vec()).expect("expecting string body");
+            println!("body: {}", body);
+            let request = self.setup_http_request().body(body).send();
+            if request.is_ok() {
+                let resp = request.ok();
+                return match resp {
+                    Some(r) => match r.status().as_u16() {
+                        s if s >= 200 && s < 400 => Ok(s),
+                        s => Err(s),
+                    },
+                    None => Err(500),
+                };
             }
-        } else {
-            self.handle_request_error(data);
+            return Err(500);
+        });
+
+        match result {
+            Ok(_) => println!("Message delivered"),
+            Err(_) => self.handle_request_error(data),
         }
     }
 

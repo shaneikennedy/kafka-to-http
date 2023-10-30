@@ -217,8 +217,13 @@ impl MessageHandler {
                     .create()
                     .unwrap();
                 info!("dumping to dlq");
-                dlq.send(&Record::from_value(c.topic.as_str(), data))
-                    .unwrap();
+                let dlq_result = retry(Exponential::from_millis(10).map(jitter).take(10), || {
+                    dlq.send(&Record::from_value(c.topic.as_str(), data.to_owned()))
+                });
+                match dlq_result.err() {
+                    Some(e) => error!("Problem sending failed message to dlq: {}", e),
+                    _ => (),
+                }
             }
             None => error!("Dropping message: {:?}", data),
         }

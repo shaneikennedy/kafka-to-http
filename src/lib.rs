@@ -6,7 +6,7 @@ use rayon::ThreadPool;
 use reqwest::blocking::Client;
 use retry::{
     delay::{jitter, Exponential},
-    retry_with_index,
+    retry,
 };
 use serde::Deserialize;
 use serde_yaml::{self};
@@ -37,6 +37,7 @@ pub struct HttpConfig {
     pub target_host: String,
     pub target_endpoint: String,
     pub timeout: u64,
+    pub max_retries: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -146,6 +147,7 @@ pub struct MessageHandler {
     msg_destination: String,
     timeout_policy: Duration,
     dlq_config: Option<DeadLetterConfig>,
+    max_retries: usize,
 }
 
 impl MessageHandler {
@@ -158,27 +160,31 @@ impl MessageHandler {
             ),
             timeout_policy: Duration::new(http_config.timeout, 0),
             dlq_config,
+            max_retries: usize::try_from(http_config.max_retries.unwrap_or(3)).unwrap(),
         }
     }
 
     pub fn handle(&self, data: Vec<u8>) {
-        let result = retry_with_index(Exponential::from_millis(10).map(jitter).take(3), |x| {
-            println!("retry attempt {}", x);
-            let body = String::from_utf8(data.to_vec()).expect("expecting string body");
-            println!("body: {}", body);
-            let request = self.setup_http_request().body(body).send();
-            if request.is_ok() {
-                let resp = request.ok();
-                return match resp {
-                    Some(r) => match r.status().as_u16() {
-                        s if s >= 200 && s < 400 => Ok(s),
-                        s => Err(s),
-                    },
-                    None => Err(500),
-                };
-            }
-            return Err(500);
-        });
+        let result = retry(
+            Exponential::from_millis(10)
+                .map(jitter)
+                .take(self.max_retries),
+            || {
+                let body = String::from_utf8(data.to_vec()).expect("expecting string body");
+                let request = self.setup_http_request().body(body).send();
+                if request.is_ok() {
+                    let resp = request.ok();
+                    return match resp {
+                        Some(r) => match r.status().as_u16() {
+                            s if s >= 200 && s < 400 => Ok(s),
+                            s => Err(s),
+                        },
+                        None => Err(500),
+                    };
+                }
+                return Err(500);
+            },
+        );
 
         match result {
             Ok(_) => println!("Message delivered"),

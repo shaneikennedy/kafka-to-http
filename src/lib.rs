@@ -36,7 +36,7 @@ pub struct ConsumerConfig {
 pub struct HttpConfig {
     pub target_host: String,
     pub target_endpoint: String,
-    pub timeout: u64,
+    pub timeout: Option<u64>,
     pub max_retries: Option<u32>,
 }
 
@@ -158,7 +158,7 @@ impl MessageHandler {
                 "{0}/{1}",
                 http_config.target_host, http_config.target_endpoint
             ),
-            timeout_policy: Duration::new(http_config.timeout, 0),
+            timeout_policy: Duration::new(http_config.timeout.unwrap_or(5), 0),
             dlq_config,
             max_retries: usize::try_from(http_config.max_retries.unwrap_or(3)).unwrap(),
         }
